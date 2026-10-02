@@ -10,6 +10,7 @@ import {
   reorderToolbar,
   shouldShowHighlightOptions,
   supportsProofread,
+  migrateLegacyDefaultAnnotationToolbar,
 } from '@/utils/annotationToolbar';
 
 describe('annotationToolbar helpers', () => {
@@ -17,18 +18,35 @@ describe('annotationToolbar helpers', () => {
     expect(ALL_ANNOTATION_TOOL_TYPES).toEqual(annotationToolButtons.map((b) => b.type));
   });
 
-  test('default toolbar is the eight non-share tools in canonical order', () => {
+  test('default toolbar includes WordHarvest beside dictionary', () => {
     expect(DEFAULT_ANNOTATION_TOOLBAR_ITEMS).toEqual([
       'copy',
       'highlight',
       'annotate',
       'search',
       'dictionary',
+      'wordharvest',
       'translate',
       'tts',
       'proofread',
     ]);
     expect(DEFAULT_ANNOTATION_TOOLBAR_ITEMS).not.toContain('share');
+  });
+
+  test('migrates the previous default toolbar and preserves custom layouts', () => {
+    expect(
+      migrateLegacyDefaultAnnotationToolbar([
+        'copy',
+        'highlight',
+        'annotate',
+        'search',
+        'dictionary',
+        'translate',
+        'tts',
+        'proofread',
+      ]),
+    ).toEqual(DEFAULT_ANNOTATION_TOOLBAR_ITEMS);
+    expect(migrateLegacyDefaultAnnotationToolbar(['search', 'copy'])).toEqual(['search', 'copy']);
   });
 
   test('copylink is opt-in: off the default toolbar, offered in the available tray', () => {
@@ -62,6 +80,7 @@ describe('annotationToolbar helpers', () => {
       'annotate',
       'search',
       'dictionary',
+      'wordharvest',
       'translate',
       'tts',
       'proofread',

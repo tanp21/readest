@@ -1,7 +1,7 @@
 import clsx from 'clsx';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { VscLibrary } from 'react-icons/vsc';
-import { MdOutlineMenu } from 'react-icons/md';
+import { MdOutlineMenu, MdManageSearch } from 'react-icons/md';
 
 import { Insets } from '@/types/misc';
 import { useEnv } from '@/context/EnvContext';
@@ -33,6 +33,8 @@ import NotebookToggler from './NotebookToggler';
 import TranslationToggler from './TranslationToggler';
 import ViewMenu from './ViewMenu';
 import SyncInfoDialog from './SyncInfoDialog';
+import { eventDispatcher } from '@/utils/event';
+import { wordHarvestAvailable } from '@/services/wordharvest';
 
 interface HeaderBarProps {
   bookKey: string;
@@ -274,6 +276,18 @@ const HeaderBar: React.FC<HeaderBarProps> = ({
             </button>
             <BookmarkToggler bookKey={bookKey} />
             <TranslationToggler bookKey={bookKey} />
+            {wordHarvestAvailable() && bookData?.bookDoc && !bookData.isFixedLayout && (
+              <button
+                title={_('Scan Current Chapter with WordHarvest')}
+                aria-label={_('Scan Current Chapter with WordHarvest')}
+                className='btn btn-ghost h-8 min-h-8 w-8 p-0'
+                onClick={() =>
+                  void eventDispatcher.dispatch('wordharvest-scan-chapter', { bookKey })
+                }
+              >
+                <MdManageSearch size={iconSize18} />
+              </button>
+            )}
           </div>
           {enableAnnotationQuickActions && (
             <Dropdown

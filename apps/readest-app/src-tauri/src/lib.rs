@@ -56,6 +56,8 @@ mod web_browser;
 #[cfg(desktop)]
 mod window_state;
 #[cfg(target_os = "windows")]
+mod wordharvest;
+#[cfg(target_os = "windows")]
 use tauri::webview::ScrollBarStyle;
 use tauri::{command, Emitter, WebviewUrl, WebviewWindowBuilder, Window};
 #[cfg(target_os = "android")]
@@ -570,6 +572,10 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_oauth::init())
         .invoke_handler(tauri::generate_handler![
+            #[cfg(target_os = "windows")]
+            wordharvest::wordharvest_set_token,
+            #[cfg(target_os = "windows")]
+            wordharvest::wordharvest_request,
             start_server,
             download_file,
             upload_file,

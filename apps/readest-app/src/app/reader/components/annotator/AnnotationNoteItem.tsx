@@ -1,6 +1,6 @@
 import clsx from 'clsx';
 import dayjs from 'dayjs';
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { MdEdit } from 'react-icons/md';
 import { BookNote } from '@/types/book';
 import { useEnv } from '@/context/EnvContext';
@@ -23,6 +23,8 @@ interface AnnotationNoteItemProps {
   isVertical: boolean;
   popupHeight: number;
   onDismiss: () => void;
+  onWordHarvestDecision?: (note: BookNote, action: 'learn' | 'ignore') => Promise<string>;
+  wordHarvestDecisionBusy?: boolean;
 }
 
 // Same chrome as Popup's own container: without the border a dark theme's
@@ -40,6 +42,8 @@ const AnnotationNoteItem: React.FC<AnnotationNoteItemProps> = ({
   isVertical,
   popupHeight,
   onDismiss,
+  onWordHarvestDecision,
+  wordHarvestDecisionBusy = false,
 }) => {
   const _ = useTranslation();
   const { appService } = useEnv();
@@ -51,6 +55,7 @@ const AnnotationNoteItem: React.FC<AnnotationNoteItemProps> = ({
   // in both places (#5785); cached because the popup re-renders on every
   // reposition and parsing long notes is not free.
   const noteHtml = useMemo(() => (note.note ? parseNoteMarkdown(note.note) : ''), [note.note]);
+  const [decisionMessage, setDecisionMessage] = useState('');
 
   const cardStyle = isVertical
     ? { minWidth: 'max-content', height: `${popupHeight}px`, maxHeight: `${popupHeight}px` }
@@ -80,6 +85,12 @@ const AnnotationNoteItem: React.FC<AnnotationNoteItemProps> = ({
     onEdit?.(note);
   };
 
+  const handleWordHarvestDecision = async (event: React.MouseEvent, action: 'learn' | 'ignore') => {
+    event.stopPropagation();
+    if (!onWordHarvestDecision || wordHarvestDecisionBusy) return;
+    setDecisionMessage(await onWordHarvestDecision(note, action));
+  };
+
   return (
     <div
       role='none'
@@ -103,6 +114,37 @@ const AnnotationNoteItem: React.FC<AnnotationNoteItemProps> = ({
               className='prose prose-sm max-w-none'
               dangerouslySetInnerHTML={{ __html: noteHtml }}
             />
+            {note.wordHarvest && (
+              <div className='flex flex-wrap items-center gap-2 border-t border-base-content/10 pt-2'>
+                {note.wordHarvest.status === 'learning' ? (
+                  <span className='text-xs text-teal-700 theme-dark:text-teal-300'>
+                    Learning · Anki
+                  </span>
+                ) : (
+                  <>
+                    <button
+                      className='btn btn-primary btn-xs'
+                      disabled={wordHarvestDecisionBusy}
+                      onClick={(event) => void handleWordHarvestDecision(event, 'learn')}
+                    >
+                      {wordHarvestDecisionBusy ? 'Saving…' : 'Learn'}
+                    </button>
+                    <button
+                      className='btn btn-ghost btn-xs'
+                      disabled={wordHarvestDecisionBusy}
+                      onClick={(event) => void handleWordHarvestDecision(event, 'ignore')}
+                    >
+                      Ignore
+                    </button>
+                  </>
+                )}
+                {decisionMessage && (
+                  <span role='status' className='text-xs text-base-content/60'>
+                    {decisionMessage}
+                  </span>
+                )}
+              </div>
+            )}
             <div className='flex items-center justify-between gap-2'>
               <span className='text-base-content/50 text-sm sm:text-xs'>
                 {dayjs(note.createdAt).fromNow()}

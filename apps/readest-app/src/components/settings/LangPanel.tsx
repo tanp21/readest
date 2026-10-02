@@ -30,6 +30,7 @@ import {
 import CustomDictionaries from './CustomDictionaries';
 import WordLensPanel from './WordLensPanel';
 import { PiTranslate } from 'react-icons/pi';
+import { pingWordHarvest, setWordHarvestToken as saveWordHarvestToken, wordHarvestAvailable } from '@/services/wordharvest';
 
 const LangPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }) => {
   const _ = useTranslation();
@@ -56,6 +57,28 @@ const LangPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset 
   );
   const [showCustomDictionaries, setShowCustomDictionaries] = useState(false);
   const [showWordLens, setShowWordLens] = useState(false);
+  const [wordHarvestToken, setWordHarvestToken] = useState('');
+  const [wordHarvestStatus, setWordHarvestStatus] = useState('');
+
+  const pairWordHarvest = async () => {
+    try {
+      await saveWordHarvestToken(wordHarvestToken);
+      setWordHarvestToken('');
+      await pingWordHarvest();
+      setWordHarvestStatus('WordHarvest connected.');
+    } catch (error) {
+      setWordHarvestStatus(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const checkWordHarvest = async () => {
+    try {
+      await pingWordHarvest();
+      setWordHarvestStatus('WordHarvest connected.');
+    } catch (error) {
+      setWordHarvestStatus(error instanceof Error ? error.message : String(error));
+    }
+  };
 
   // Translation is unavailable for PDFs and for books already in the target
   // language (issue #5600). The reader toolbar's toggler has always refused
@@ -317,6 +340,27 @@ const LangPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset 
           />
         </SettingsRow>
       </BoxedList>
+
+      {wordHarvestAvailable() && (
+        <BoxedList title='WordHarvest' data-setting-id='settings.language.wordharvest'>
+          <SettingsRow label='Pair token' description='Copy it from WordHarvest Settings → Readest.'>
+            <input
+              className='input input-bordered eink-bordered w-48 max-w-full'
+              type='password'
+              autoComplete='off'
+              value={wordHarvestToken}
+              onChange={(event) => setWordHarvestToken(event.target.value)}
+              aria-label='WordHarvest pair token'
+            />
+          </SettingsRow>
+          <SettingsRow label='Connection' description={wordHarvestStatus || 'Then add Learn with WordHarvest in Customize Toolbar.'}>
+            <div className='flex gap-2'>
+              <button className='btn btn-ghost eink-bordered' type='button' onClick={() => void checkWordHarvest()}>Check</button>
+              <button className='btn btn-contrast' type='button' disabled={!wordHarvestToken.trim()} onClick={() => void pairWordHarvest()}>Pair</button>
+            </div>
+          </SettingsRow>
+        </BoxedList>
+      )}
 
       <BoxedList
         title={_('Dictionaries')}

@@ -29,6 +29,7 @@ import {
 import { DEFAULT_AI_SETTINGS } from './ai/constants';
 import { getTargetLang, isCJKEnv } from '@/utils/misc';
 import { safeLoadJSON, safeSaveJSON } from './persistence';
+import { migrateLegacyDefaultAnnotationToolbar } from '@/utils/annotationToolbar';
 
 export interface Context {
   fs: FileSystem;
@@ -159,6 +160,12 @@ export async function loadSettings(ctx: Context): Promise<SystemSettings> {
     ...getDefaultViewSettings(ctx),
     ...settings.globalViewSettings,
   };
+  const oldToolbarItems = settings.globalViewSettings.annotationToolbarItems;
+  const migratedToolbarItems = migrateLegacyDefaultAnnotationToolbar(oldToolbarItems);
+  const toolbarWasMigrated = migratedToolbarItems !== oldToolbarItems;
+  if (toolbarWasMigrated && migratedToolbarItems) {
+    settings.globalViewSettings.annotationToolbarItems = migratedToolbarItems;
+  }
   settings.aiSettings = {
     ...DEFAULT_AI_SETTINGS,
     ...settings.aiSettings,
@@ -203,6 +210,9 @@ export async function loadSettings(ctx: Context): Promise<SystemSettings> {
   }
 
   if (migrateBookshelfSettings(settings)) {
+    await saveSettings(ctx.fs, settings);
+  }
+  if (toolbarWasMigrated) {
     await saveSettings(ctx.fs, settings);
   }
 

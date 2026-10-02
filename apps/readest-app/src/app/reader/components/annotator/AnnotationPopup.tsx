@@ -47,6 +47,8 @@ interface AnnotationPopupProps {
   onToggleGlobal?: () => void;
   onHighlight: (update?: boolean) => void;
   onDismiss: () => void;
+  onWordHarvestDecision?: (note: BookNote, action: 'learn' | 'ignore') => Promise<string>;
+  wordHarvestDecisionBusy?: boolean;
 }
 
 const AnnotationPopup: React.FC<AnnotationPopupProps> = ({
@@ -69,6 +71,8 @@ const AnnotationPopup: React.FC<AnnotationPopupProps> = ({
   onToggleGlobal,
   onHighlight,
   onDismiss,
+  onWordHarvestDecision,
+  wordHarvestDecisionBusy,
 }) => {
   // Tall enough for a few lines plus the Cancel/Save row, so the editor opens
   // at a usable size instead of the 44px toolbar height it replaces.
@@ -177,6 +181,8 @@ const AnnotationPopup: React.FC<AnnotationPopupProps> = ({
               popupWidth={boxWidth}
               popupHeight={boxHeight}
               onDismiss={onDismiss}
+              onWordHarvestDecision={onWordHarvestDecision}
+              wordHarvestDecisionBusy={wordHarvestDecisionBusy}
             />
           ) : (
             highlightOptionsVisible && (

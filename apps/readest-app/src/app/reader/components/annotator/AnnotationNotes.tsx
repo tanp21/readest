@@ -14,6 +14,8 @@ interface AnnotationNotesProps {
   popupWidth: number;
   popupHeight: number;
   onDismiss: () => void;
+  onWordHarvestDecision?: (note: BookNote, action: 'learn' | 'ignore') => Promise<string>;
+  wordHarvestDecisionBusy?: boolean;
 }
 
 const AnnotationNotes: React.FC<AnnotationNotesProps> = ({
@@ -26,6 +28,8 @@ const AnnotationNotes: React.FC<AnnotationNotesProps> = ({
   popupWidth,
   popupHeight,
   onDismiss,
+  onWordHarvestDecision,
+  wordHarvestDecisionBusy,
 }) => {
   const maxSize = useResponsiveSize(250);
 
@@ -79,6 +83,8 @@ const AnnotationNotes: React.FC<AnnotationNotesProps> = ({
             isVertical={isVertical}
             popupHeight={popupHeight}
             onDismiss={onDismiss}
+            onWordHarvestDecision={onWordHarvestDecision}
+            wordHarvestDecisionBusy={wordHarvestDecisionBusy}
           />
         ))}
       </div>

@@ -62,7 +62,9 @@ const TranslatorPopup: React.FC<TranslatorPopupProps> = ({
     getViewSettings(bookKey)?.translateSourceLang ?? 'AUTO',
   );
   const [targetLang, setTargetLang] = useState(settings.globalReadSettings.translateTargetLang);
-  const [provider, setProvider] = useState(settings.globalReadSettings.translationProvider);
+  const [provider, setProvider] = useState(
+    getViewSettings(bookKey)?.translationProvider ?? settings.globalReadSettings.translationProvider,
+  );
   const [translation, setTranslation] = useState<string | null>(null);
   const [detectedSourceLang, setDetectedSourceLang] = useState<string | null>(null);
 
@@ -97,6 +99,7 @@ const TranslatorPopup: React.FC<TranslatorPopupProps> = ({
     if (selectedTranslator) {
       settings.globalReadSettings.translationProvider = selectedTranslator.name;
       setSettings(settings);
+      saveViewSettings(envConfig, bookKey, 'translationProvider', selectedTranslator.name, false, false);
       setProvider(selectedTranslator.name);
     }
   };
@@ -112,6 +115,7 @@ const TranslatorPopup: React.FC<TranslatorPopupProps> = ({
   }, [translators]);
 
   useEffect(() => {
+    let active = true;
     setLoading(true);
     const fetchTranslation = async () => {
       setError(null);
@@ -119,7 +123,7 @@ const TranslatorPopup: React.FC<TranslatorPopupProps> = ({
       setTranslation(null);
 
       try {
-        const input = text.replaceAll('\n', '').trim();
+        const input = provider === 'wordharvest' ? text.trim() : text.replaceAll('\n', '').trim();
         const result = await translate([input]);
         const translatedText = result[0];
         const detectedSource = null;
@@ -131,12 +135,12 @@ const TranslatorPopup: React.FC<TranslatorPopupProps> = ({
         // Decode provider entities once while keeping any markup literal.
         const decoder = document.createElement('textarea');
         decoder.innerHTML = translatedText.replaceAll('<', '&lt;');
-        setTranslation(decoder.value);
+        if (active) setTranslation(decoder.value);
         if (sourceLang === 'AUTO' && detectedSource) {
-          setDetectedSourceLang(detectedSource);
+          if (active) setDetectedSourceLang(detectedSource);
         }
       } catch (err) {
-        console.error(err);
+        if (!active) return;
         // Only blame a missing login when this provider actually needs one;
         // Azure/Google/Yandex run without a Readest account in the app.
         if (translator?.authRequired && !token) {
@@ -146,11 +150,12 @@ const TranslatorPopup: React.FC<TranslatorPopupProps> = ({
           setErrorDetail(err instanceof Error ? err.message : String(err));
         }
       } finally {
-        setLoading(false);
+        if (active) setLoading(false);
       }
     };
 
     fetchTranslation();
+    return () => { active = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [text, token, sourceLang, targetLang, provider, translate]);
 
@@ -176,7 +181,7 @@ const TranslatorPopup: React.FC<TranslatorPopupProps> = ({
         <div className='overflow-y-auto p-4 font-sans'>
           <div className='mb-2 flex items-center justify-between'>
             <h1 className='text-sm font-medium'>{_('Original Text')}</h1>
-            <Select
+            {provider === 'wordharvest' ? <span className='text-sm'>English</span> : <Select
               value={sourceLang}
               onChange={handleSourceLangChange}
               options={[
@@ -192,9 +197,9 @@ const TranslatorPopup: React.FC<TranslatorPopupProps> = ({
                     return { value: code, label };
                   }),
               ]}
-            />
+            />}
           </div>
-          <p className='text-base'>{text}</p>
+          <p className='whitespace-pre-wrap text-base'>{text}</p>
         </div>
 
         <div className='mx-4 shrink-0 border-t border-base-content/20'></div>
@@ -202,7 +207,7 @@ const TranslatorPopup: React.FC<TranslatorPopupProps> = ({
         <div className='overflow-y-auto p-4 font-sans'>
           <div className='mb-2 flex items-center justify-between'>
             <h2 className='text-sm font-medium'>{_('Translated Text')}</h2>
-            <Select
+            {provider === 'wordharvest' ? <span className='text-sm'>Tiếng Việt</span> : <Select
               value={targetLang}
               onChange={handleTargetLangChange}
               options={[
@@ -211,7 +216,7 @@ const TranslatorPopup: React.FC<TranslatorPopupProps> = ({
                   .sort((a, b) => a[1].localeCompare(b[1]))
                   .map(([code, name]) => ({ value: code, label: name })),
               ]}
-            />
+            />}
           </div>
           {loading ? (
             <p className='text-base-content/80 italic'>{_('Loading...')}</p>
@@ -225,7 +230,7 @@ const TranslatorPopup: React.FC<TranslatorPopupProps> = ({
                   )}
                 </div>
               ) : (
-                <p className='text-base'>{translation || _('No translation available.')}</p>
+                <p className='whitespace-pre-wrap text-base'>{translation || _('No translation available.')}</p>
               )}
             </div>
           )}

@@ -5,6 +5,8 @@
   "windows": ["main", "updater", "reader-*"],
   "permissions": [
     "core:default",
+    "allow-wordharvest-set-token",
+    "allow-wordharvest-request",
     "fs:default",
     "fs:read-meta",
     "fs:allow-open",

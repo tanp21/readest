@@ -5,7 +5,14 @@ import { useRouter } from 'next/navigation';
 import { BiMoon, BiSun } from 'react-icons/bi';
 import { PiGear } from 'react-icons/pi';
 import { TbSunMoon } from 'react-icons/tb';
-import { MdZoomOut, MdZoomIn, MdCheck, MdInfoOutline, MdOutlineSensors } from 'react-icons/md';
+import {
+  MdZoomOut,
+  MdZoomIn,
+  MdCheck,
+  MdInfoOutline,
+  MdOutlineSensors,
+  MdManageSearch,
+} from 'react-icons/md';
 import { MdRemove, MdAdd, MdContrast } from 'react-icons/md';
 import { MdSync, MdSyncProblem } from 'react-icons/md';
 import { IoMdExpand } from 'react-icons/io';
@@ -40,6 +47,7 @@ import { nextThemeMode } from '@/utils/ambientLight';
 import { saveViewSettings } from '@/helpers/settings';
 import { tauriHandleToggleFullScreen } from '@/utils/window';
 import { setCoverSpread } from '@/utils/spread';
+import { wordHarvestAvailable } from '@/services/wordharvest';
 import MenuItem from '@/components/MenuItem';
 import Menu from '@/components/Menu';
 
@@ -510,6 +518,17 @@ const ViewMenu: React.FC<ViewMenuProps> = ({
         onClick={toggleAutoScroll}
         disabled={!isScrolledMode}
       />
+
+      {wordHarvestAvailable() && bookData.bookDoc && !bookData.isFixedLayout && (
+        <MenuItem
+          label={_('Scan Current Chapter with WordHarvest')}
+          Icon={MdManageSearch}
+          onClick={() => {
+            setIsDropdownOpen?.(false);
+            void eventDispatcher.dispatch('wordharvest-scan-chapter', { bookKey });
+          }}
+        />
+      )}
 
       <hr aria-hidden='true' className='border-base-300 my-1' />
 

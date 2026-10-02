@@ -209,6 +209,12 @@ export interface BookNote {
   style?: HighlightStyle;
   color?: HighlightColor;
   note: string;
+  /** Companion metadata for a vocabulary candidate discovered by WordHarvest. */
+  wordHarvest?: {
+    term: string;
+    context: string;
+    status: 'suggested' | 'learning';
+  };
   /**
    * If true, this annotation should be applied to every occurrence of `text`
    * within the same section (chapter/spine item), in addition to the original

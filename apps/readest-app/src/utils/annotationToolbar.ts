@@ -18,13 +18,14 @@ export const ALL_ANNOTATION_TOOL_TYPES: AnnotationToolType[] = [
   'annotate',
   'search',
   'dictionary',
+  'wordharvest',
   'translate',
   'tts',
   'proofread',
   'share',
 ];
 
-// Default toolbar: the eight pre-existing tools in their original order.
+// Default toolbar includes WordHarvest beside Dictionary for contextual lookup.
 // 'share' starts hidden in the Available tray per the #4014 design, and
 // 'copylink' is opt-in the same way (#5452) — a niche action most readers
 // never need, reachable by adding it in Customize Toolbar.
@@ -34,10 +35,36 @@ export const DEFAULT_ANNOTATION_TOOLBAR_ITEMS: AnnotationToolType[] = [
   'annotate',
   'search',
   'dictionary',
+  'wordharvest',
   'translate',
   'tts',
   'proofread',
 ];
+
+const LEGACY_DEFAULT_ANNOTATION_TOOLBAR_ITEMS: AnnotationToolType[] = [
+  'copy',
+  'highlight',
+  'annotate',
+  'search',
+  'dictionary',
+  'translate',
+  'tts',
+  'proofread',
+];
+
+// Upgrade existing default-only toolbars once while preserving custom layouts.
+export const migrateLegacyDefaultAnnotationToolbar = (
+  items: AnnotationToolType[] | undefined,
+): AnnotationToolType[] | undefined => {
+  if (
+    !items ||
+    items.length !== LEGACY_DEFAULT_ANNOTATION_TOOLBAR_ITEMS.length ||
+    items.some((item, index) => item !== LEGACY_DEFAULT_ANNOTATION_TOOLBAR_ITEMS[index])
+  ) {
+    return items;
+  }
+  return DEFAULT_ANNOTATION_TOOLBAR_ITEMS;
+};
 
 // Drop unknown/duplicate entries; fall back to the default when unset (a
 // pre-existing per-book config may not carry the field yet).

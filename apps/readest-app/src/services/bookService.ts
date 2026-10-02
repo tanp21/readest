@@ -36,6 +36,7 @@ import { tryNativeParseMobi } from '@/utils/tauriMobiBridge';
 import { tryNativeParsePdf } from '@/utils/tauriPdfBridge';
 import { isPseStreamFileName, openPseStreamBook, parsePseStreamFileName } from './opds/pseStream';
 import { DEFAULT_BOOK_SEARCH_CONFIG, DEFAULT_FIXED_LAYOUT_VIEW_SETTINGS } from './constants';
+import { migrateLegacyDefaultAnnotationToolbar } from '@/utils/annotationToolbar';
 import { isContentURI, isValidURL, makeSafeFilename } from '@/utils/misc';
 import { deserializeConfig, serializeConfig, serializeRawConfig } from '@/utils/serializer';
 import { ClosableFile } from '@/utils/file';
@@ -1077,7 +1078,17 @@ export async function loadBookConfig(
     if (await fs.exists(getConfigFilename(book), 'Books')) {
       str = (await fs.readFile(getConfigFilename(book), 'Books', 'text')) as string;
     }
-    return deserializeConfig(str, globalViewSettings, DEFAULT_BOOK_SEARCH_CONFIG);
+    const config = deserializeConfig(str, globalViewSettings, DEFAULT_BOOK_SEARCH_CONFIG);
+    const oldToolbarItems = config.viewSettings?.annotationToolbarItems;
+    const migratedToolbarItems = migrateLegacyDefaultAnnotationToolbar(oldToolbarItems);
+    if (migratedToolbarItems !== oldToolbarItems && migratedToolbarItems) {
+      config.viewSettings = {
+        ...config.viewSettings,
+        annotationToolbarItems: migratedToolbarItems,
+      };
+      await saveBookConfig(fs, book, config, settings);
+    }
+    return config;
   } catch {
     return deserializeConfig('{}', globalViewSettings, DEFAULT_BOOK_SEARCH_CONFIG);
   }

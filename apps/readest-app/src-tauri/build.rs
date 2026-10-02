@@ -33,6 +33,8 @@ fn main() {
     // Keep this list in sync with the generate_handler! list in lib.rs.
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
+            "wordharvest_set_token",
+            "wordharvest_request",
             "start_server",
             "download_file",
             "upload_file",

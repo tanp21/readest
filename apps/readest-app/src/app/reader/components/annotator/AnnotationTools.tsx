@@ -4,7 +4,7 @@ import { FiCopy } from 'react-icons/fi';
 import { FiLink } from 'react-icons/fi';
 import { FiShare } from 'react-icons/fi';
 import { PiHighlighterFill } from 'react-icons/pi';
-import { LuBookA } from 'react-icons/lu';
+import { LuBookA, LuSprout } from 'react-icons/lu';
 import { BsPencilSquare } from 'react-icons/bs';
 import { BsTranslate } from 'react-icons/bs';
 import { FaHeadphones } from 'react-icons/fa6';
@@ -76,6 +76,12 @@ export const annotationToolButtons = createAnnotationToolButtons([
     tooltip: _('Look up text in dictionary after selection'),
     Icon: LuBookA,
     quickAction: true,
+  },
+  {
+    type: 'wordharvest',
+    label: _('Learn with WordHarvest'),
+    tooltip: _('Look up selected vocabulary with WordHarvest'),
+    Icon: LuSprout,
   },
   {
     type: 'translate',

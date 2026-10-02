@@ -49,7 +49,7 @@ export function useTranslator({
       const sourceLanguage = options?.source || sourceLang;
       const targetLanguage = options?.target || targetLang || getLocale();
       const useCache = options?.useCache ?? false;
-      const textsToTranslate = enablePreprocessing ? preprocess(input) : input;
+      const textsToTranslate = selectedProvider === 'wordharvest' ? input : enablePreprocessing ? preprocess(input) : input;
 
       if (textsToTranslate.length === 0 || textsToTranslate.every((t) => !t?.trim())) {
         return textsToTranslate;
@@ -84,7 +84,7 @@ export function useTranslator({
           ),
         );
 
-        return enablePolishing ? polish(results, targetLanguage) : results;
+        return selectedProvider === 'wordharvest' ? results : enablePolishing ? polish(results, targetLanguage) : results;
       }
 
       setLoading(true);
@@ -140,7 +140,7 @@ export function useTranslator({
         );
 
         setLoading(false);
-        return enablePolishing ? polish(results, targetLanguage) : results;
+        return selectedProvider === 'wordharvest' ? results : enablePolishing ? polish(results, targetLanguage) : results;
       } catch (err) {
         if (err instanceof Error && err.message.includes(ErrorCodes.DAILY_QUOTA_EXCEEDED)) {
           eventDispatcher.dispatch('toast', {

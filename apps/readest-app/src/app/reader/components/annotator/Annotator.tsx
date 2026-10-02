@@ -94,6 +94,9 @@ import DictionaryPopup from './DictionaryPopup';
 import DictionarySheet from './DictionarySheet';
 import NoteEditorSheet from './NoteEditorSheet';
 import TranslatorPopup from './TranslatorPopup';
+import WordHarvestPopup from './WordHarvestPopup';
+import { buildWordHarvestLookup } from '@/services/wordharvestContext';
+import { wordHarvestAvailable, type WordHarvestLookupRequest } from '@/services/wordharvest';
 import useShortcuts from '@/hooks/useShortcuts';
 import ProofreadPopup from './ProofreadPopup';
 import { setProofreadRulesVisibility } from '@/app/reader/components/ProofreadRules';
@@ -101,6 +104,8 @@ import ExportMarkdownDialog from './ExportMarkdownDialog';
 import ImportAnnotationsDialog from './ImportAnnotationsDialog';
 import Alert from '@/components/Alert';
 import ModalPortal from '@/components/ModalPortal';
+import Dialog from '@/components/Dialog';
+import { getWordHarvestChapterOptions } from '@/services/wordharvestChapters';
 import { SelectedFile, useFileSelector } from '@/hooks/useFileSelector';
 import { parseMrexpt } from '@/utils/mrexpt';
 import {
@@ -119,6 +124,22 @@ import {
   parseReadEraBackup,
 } from '@/utils/readera';
 import { convertReadEraDocToBookNotes } from '@/services/annotation/providers/readera';
+import {
+  cancelWordHarvestChapterScan,
+  decideWordHarvestChapterCandidate,
+  getWordHarvestChapterScan,
+  startWordHarvestChapterScan,
+  type WordHarvestChapterScanSnapshot,
+  type WordHarvestChapterSuggestion,
+} from '@/services/wordharvest';
+import { collectChapterScanText, findChapterOccurrenceCfis } from '@/services/wordharvestChapter';
+import {
+  markWordHarvestNoteLearning,
+  upgradeLegacyWordHarvestColors,
+  WORDHARVEST_LEARNING_COLOR,
+  WORDHARVEST_SUGGESTED_COLOR,
+} from '@/services/wordharvestHighlights';
+import type { SectionItem } from '@/libs/document';
 
 const ZERO_INSETS: Insets = { top: 0, right: 0, bottom: 0, left: 0 };
 
@@ -181,6 +202,10 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
   const [translationEpoch, setTranslationEpoch] = useState(0);
   const [showAnnotPopup, setShowAnnotPopup] = useState(false);
   const [showDictionaryPopup, setShowDictionaryPopup] = useState(false);
+  const [showWordHarvestPopup, setShowWordHarvestPopup] = useState(false);
+  const [wordHarvestRequest, setWordHarvestRequest] = useState<WordHarvestLookupRequest | null>(
+    null,
+  );
   const [showDeepLPopup, setShowDeepLPopup] = useState(false);
   const [showProofreadPopup, setShowProofreadPopup] = useState(false);
   const [trianglePosition, setTrianglePosition] = useState<Position>();
@@ -198,8 +223,215 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
   const [noteEditorTarget, setNoteEditorTarget] = useState<{
     annotationId: string;
     placeholderIds: string[];
+    initialValue?: string;
   } | null>(null);
   const [annotationNotes, setAnnotationNotes] = useState<BookNote[]>([]);
+  const [chapterScan, setChapterScan] = useState<WordHarvestChapterScanSnapshot | null>(null);
+  const [chapterScanBusy, setChapterScanBusy] = useState(false);
+  const [chapterScanSelection, setChapterScanSelection] = useState<number | null>(null);
+  const [detectedChapterIndex, setDetectedChapterIndex] = useState<number | null>(null);
+  const [wordHarvestDecisionBusy, setWordHarvestDecisionBusy] = useState(false);
+  const scanCancelledRef = useRef(false);
+
+  useEffect(() => {
+    const currentConfig = getConfig(bookKey);
+    if (!currentConfig?.booknotes) return;
+    const { notes, changed } = upgradeLegacyWordHarvestColors(currentConfig.booknotes, Date.now());
+    if (!changed.length) return;
+    const updatedConfig = updateBooknotes(bookKey, notes);
+    if (updatedConfig) saveConfig(envConfig, bookKey, updatedConfig, settings);
+    const views = getViewsById(bookKey.split('-')[0]!);
+    for (const { before, after } of changed) {
+      views.forEach((readerView) => {
+        readerView?.addAnnotation(before, true);
+        readerView?.addAnnotation(after);
+      });
+    }
+  }, [
+    bookKey,
+    config.booknotes,
+    envConfig,
+    getConfig,
+    getViewsById,
+    saveConfig,
+    settings,
+    updateBooknotes,
+  ]);
+
+  const persistChapterSuggestions = useCallback(
+    async (
+      suggestions: WordHarvestChapterSuggestion[],
+      section: SectionItem,
+      anchors: ReturnType<typeof collectChapterScanText>['anchors'],
+    ) => {
+      const currentConfig = getConfig(bookKey);
+      if (!currentConfig) return 0;
+      const existing = [...(currentConfig.booknotes ?? [])];
+      const ignored = new Set(
+        existing
+          .filter((note) => note.deletedAt && note.wordHarvest)
+          .map(
+            (note) =>
+              `${note.wordHarvest!.term.toLocaleLowerCase()}\n${note.wordHarvest!.context.toLocaleLowerCase()}`,
+          ),
+      );
+      const now = Date.now();
+      const created: BookNote[] = [];
+      for (const suggestion of suggestions) {
+        if (
+          ignored.has(
+            `${suggestion.term.toLocaleLowerCase()}\n${suggestion.context.toLocaleLowerCase()}`,
+          )
+        )
+          continue;
+        for (const occurrence of suggestion.occurrences) {
+          const anchor = anchors.get(occurrence.sentenceId);
+          if (!anchor) continue;
+          for (const cfi of findChapterOccurrenceCfis(section, anchor, occurrence.surfaceForm)) {
+            const alreadySaved = existing.some(
+              (note) =>
+                !note.deletedAt && note.wordHarvest?.term === suggestion.term && note.cfi === cfi,
+            );
+            if (alreadySaved) continue;
+            const definition = [
+              `**${suggestion.term}**${suggestion.partOfSpeech ? ` · *${suggestion.partOfSpeech}*` : ''}`,
+              '',
+              '**Definition**',
+              suggestion.definition,
+              '',
+              '**Nghĩa tiếng Việt**',
+              suggestion.meaningVi,
+              ...(suggestion.examples.length
+                ? ['', '**Examples**', ...suggestion.examples.map((item) => `- ${item}`)]
+                : []),
+              '',
+              `*Context: ${suggestion.context}*`,
+            ].join('\n');
+            created.push({
+              id: uniqueId(),
+              type: 'annotation',
+              cfi,
+              text: occurrence.surfaceForm,
+              style: 'highlight',
+              color: WORDHARVEST_SUGGESTED_COLOR,
+              note: definition,
+              page: getBookProgress(bookKey)?.page ?? 0,
+              wordHarvest: {
+                term: suggestion.term,
+                context: suggestion.context,
+                status: 'suggested',
+              },
+              createdAt: now,
+              updatedAt: now,
+            });
+          }
+        }
+      }
+      if (!created.length) return 0;
+      const updatedConfig = updateBooknotes(bookKey, [...existing, ...created]);
+      if (updatedConfig) saveConfig(envConfig, bookKey, updatedConfig, settings);
+      for (const annotation of created) await view?.addAnnotation(annotation);
+      return created.length;
+    },
+    [bookKey, envConfig, getConfig, saveConfig, settings, updateBooknotes, view],
+  );
+
+  const chapterOptions = useMemo(
+    () => (bookData.bookDoc ? getWordHarvestChapterOptions(bookData.bookDoc) : []),
+    [bookData.bookDoc],
+  );
+
+  const handleRunChapterScan = useCallback(async (selectedIndex: number) => {
+    const bookDoc = bookData.bookDoc;
+    if (!bookDoc || bookData.isFixedLayout || chapterScanBusy) return;
+    const section = bookDoc.sections[selectedIndex];
+    const chapterLabel = chapterOptions.find((option) => option.index === selectedIndex)?.label;
+    if (!section || !chapterLabel) return;
+    setChapterScanSelection(null);
+    setChapterScanBusy(true);
+    setChapterScan({
+      scanId: '',
+      status: 'queued',
+      completed: 0,
+      total: 0,
+      error: `Preparing ${chapterLabel}…`,
+      suggestions: [],
+    });
+    scanCancelledRef.current = false;
+    try {
+      const document = await section.createDocument();
+      const extracted = collectChapterScanText(document);
+      if (!extracted.sentences.length)
+        throw new Error(`No readable text found in ${chapterLabel}.`);
+      const result = await startWordHarvestChapterScan({
+        source: {
+          bookKey,
+          title: String(bookDoc.metadata.title ?? bookData.book?.title ?? ''),
+          author: String(bookDoc.metadata.author ?? bookData.book?.author ?? ''),
+          locator: section.href ?? section.id,
+        },
+        chapterLabel,
+        sentences: extracted.sentences,
+      });
+      setChapterScan(result);
+      let snapshot = result;
+      while (
+        !scanCancelledRef.current &&
+        ['queued', 'scanning', 'enriching'].includes(snapshot.status)
+      ) {
+        await new Promise((resolve) => window.setTimeout(resolve, 900));
+        snapshot = await getWordHarvestChapterScan(result.scanId);
+        setChapterScan(snapshot);
+      }
+      if (snapshot.status === 'done' || snapshot.status === 'partial') {
+        const count = await persistChapterSuggestions(
+          snapshot.suggestions,
+          section,
+          extracted.anchors,
+        );
+        setChapterScan({
+          ...snapshot,
+          error: count
+            ? `Added ${count} vocabulary highlights.`
+            : 'No new vocabulary highlights found.',
+        });
+      }
+    } catch (error) {
+      setChapterScan({
+        scanId: '',
+        status: 'error',
+        completed: 0,
+        total: 0,
+        error: error instanceof Error ? error.message : String(error),
+        suggestions: [],
+      });
+    } finally {
+      setChapterScanBusy(false);
+    }
+  }, [
+    bookData.book,
+    bookData.bookDoc,
+    bookData.isFixedLayout,
+    bookKey,
+    chapterScanBusy,
+    chapterOptions,
+    persistChapterSuggestions,
+  ]);
+
+  useEffect(() => {
+    const onScanRequest = (event: CustomEvent) => {
+      if (event.detail?.bookKey !== bookKey || chapterScanBusy || bookData.isFixedLayout) return;
+      const activeIndex = getBookProgress(bookKey)?.index ?? 0;
+      const detectedIndex = chapterOptions.some((option) => option.index === activeIndex)
+        ? activeIndex
+        : chapterOptions[0]?.index;
+      if (detectedIndex === undefined) return;
+      setDetectedChapterIndex(detectedIndex);
+      setChapterScanSelection(detectedIndex);
+    };
+    eventDispatcher.on('wordharvest-scan-chapter', onScanRequest);
+    return () => eventDispatcher.off('wordharvest-scan-chapter', onScanRequest);
+  }, [bookKey, bookData.isFixedLayout, chapterOptions, chapterScanBusy]);
   const [editingAnnotation, setEditingAnnotation] = useState<BookNote | null>(null);
   const [externalDragPoint, setExternalDragPoint] = useState<Point | null>(null);
   const [showExportDialog, setShowExportDialog] = useState(false);
@@ -241,14 +473,22 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
   // cleared without the dismiss that closes them: the instant highlight quick
   // action clears it on a tap (#6419). Close them in the same render, before
   // they can render without text.
-  if (!selection && (showDictionaryPopup || showDeepLPopup || showProofreadPopup)) {
+  if (
+    !selection &&
+    (showDictionaryPopup || showWordHarvestPopup || showDeepLPopup || showProofreadPopup)
+  ) {
     setShowDictionaryPopup(false);
+    setShowWordHarvestPopup(false);
     setShowDeepLPopup(false);
     setShowProofreadPopup(false);
   }
 
   const showingPopup =
-    showAnnotPopup || showDictionaryPopup || showDeepLPopup || showProofreadPopup;
+    showAnnotPopup ||
+    showDictionaryPopup ||
+    showWordHarvestPopup ||
+    showDeepLPopup ||
+    showProofreadPopup;
 
   const popupPadding = useResponsiveSize(10);
   const trianglePadding = popupPadding * 2 + 6;
@@ -460,6 +700,7 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
       setShowAnnotationNotes(false);
       setAnnotationNotes([]);
       setShowDictionaryPopup(false);
+      setShowWordHarvestPopup(false);
       setShowDeepLPopup(false);
       setShowProofreadPopup(false);
       setEditingAnnotation(null);
@@ -773,10 +1014,13 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
       // over is null until the first relocate: read the live progress instead.
       page: annotation.page || getBookProgress(bookKey)?.page || 0,
     };
-    if (isNote) {
+    if (isNote || annotation.wordHarvest) {
       setShowAnnotationNotes(true);
       setHighlightOptionsVisible(false);
       setEditingAnnotation(null);
+      setAnnotationNotes(
+        annotation.wordHarvest ? [annotation] : annotations.filter((item) => item.note),
+      );
     } else {
       setShowAnnotPopup(false);
       setEditingAnnotation(null);
@@ -1261,7 +1505,8 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
       // answering it with the toolbar (or, worse, re-running the quick action)
       // closed the surface on the frame it opened (#6018). Nothing can select
       // new text while one of these is up — they all sit over the page.
-      if (showDictionaryPopup || showDeepLPopup || showProofreadPopup) return;
+      if (showDictionaryPopup || showWordHarvestPopup || showDeepLPopup || showProofreadPopup)
+        return;
 
       const { enableAnnotationQuickActions, annotationQuickAction } = viewSettings;
       if (wantWordLensDict) {
@@ -1373,6 +1618,7 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
     setShowAnnotPopup(true);
     setShowDeepLPopup(false);
     setShowDictionaryPopup(false);
+    setShowWordHarvestPopup(false);
     setShowProofreadPopup(false);
   };
 
@@ -1477,12 +1723,16 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
   // Returns the brand-new highlight records (one per page of a cross-page
   // selection): only those are placeholders the note-cancel flow may remove;
   // restyling/toggling an existing one must never tear down the user's record.
-  const handleHighlight = (update = false, highlightStyle?: HighlightStyle): BookNote[] => {
+  const handleHighlight = (
+    update = false,
+    highlightStyle?: HighlightStyle,
+    highlightColor?: string,
+  ): BookNote[] => {
     if (!selection || !selection.text) return [];
     setHighlightOptionsVisible(true);
     const { booknotes: annotations = [] } = config;
     const style = highlightStyle || settings.globalReadSettings.highlightStyle;
-    const color = settings.globalReadSettings.highlightStyles[style];
+    const color = highlightColor ?? settings.globalReadSettings.highlightStyles[style];
     setSelectedStyle(style);
     setSelectedColor(color);
     const views = getViewsById(bookKey.split('-')[0]!);
@@ -1653,7 +1903,11 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
     }
   };
 
-  const handleAnnotate = () => {
+  const handleAnnotate = (
+    initialNote?: string,
+    highlightColor?: string,
+    highlightStyle?: HighlightStyle,
+  ) => {
     if (!selection || !selection.text) return;
     // A popup selection without a CFI has nothing to anchor a note to (the
     // toolbar button is disabled, this guards the keyboard shortcut).
@@ -1664,7 +1918,7 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
       const { sectionHref: href } = progress;
       selection.href = href;
     }
-    const created = handleHighlight(true);
+    const created = handleHighlight(true, highlightStyle, highlightColor);
     const cfi = selection.popup ? selection.cfi : view?.getCFI(selection.index, selection.range);
     const target =
       created[0] ??
@@ -1681,7 +1935,87 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
     setNoteEditorTarget({
       annotationId: target.id,
       placeholderIds: created.map((annotation) => annotation.id),
+      initialValue: initialNote
+        ? [initialNote, target.note].filter(Boolean).join('\n\n')
+        : undefined,
     });
+  };
+
+  const handleWordHarvestDecision = useCallback(
+    async (note: BookNote, action: 'learn' | 'ignore'): Promise<string> => {
+      if (!note.wordHarvest || wordHarvestDecisionBusy) return 'Please wait…';
+      const wordHarvest = note.wordHarvest;
+      setWordHarvestDecisionBusy(true);
+      try {
+        const result = await decideWordHarvestChapterCandidate(
+          wordHarvest.term,
+          wordHarvest.context,
+          action,
+        );
+        const currentConfig = getConfig(bookKey);
+        if (!currentConfig) return 'Could not update this book note.';
+        const now = Date.now();
+        const affected = (currentConfig.booknotes ?? []).filter(
+          (item) =>
+            !item.deletedAt &&
+            item.wordHarvest?.term === wordHarvest.term &&
+            item.wordHarvest?.context === wordHarvest.context,
+        );
+        const changed = new Set(affected.map((item) => item.id));
+        const updatedNotes = (currentConfig.booknotes ?? []).map((item) => {
+          if (!changed.has(item.id)) return item;
+          if (action === 'ignore') return { ...item, deletedAt: now, updatedAt: now };
+          return markWordHarvestNoteLearning(item, now);
+        });
+        const updatedConfig = updateBooknotes(bookKey, updatedNotes);
+        if (updatedConfig) saveConfig(envConfig, bookKey, updatedConfig, settings);
+        const views = getViewsById(bookKey.split('-')[0]!);
+        if (action === 'ignore') {
+          affected.forEach((item) =>
+            views.forEach((readerView) => removeBookNoteOverlays(readerView, item)),
+          );
+          setAnnotationNotes([]);
+          handleDismissPopupAndSelection();
+          return 'Ignored this vocabulary item.';
+        }
+        const learnedById = new Map(
+          updatedNotes.filter((item) => changed.has(item.id)).map((item) => [item.id, item]),
+        );
+        for (const before of affected) {
+          const after = learnedById.get(before.id);
+          if (!after) continue;
+          views.forEach((readerView) => {
+            readerView?.addAnnotation(before, true);
+            readerView?.addAnnotation(after);
+          });
+        }
+        setAnnotationNotes((items) => items.map((item) => learnedById.get(item.id) ?? item));
+        return result.ankiState === 'synced'
+          ? 'Added to Anki.'
+          : 'Saved for learning; Anki sync is pending.';
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      } finally {
+        setWordHarvestDecisionBusy(false);
+      }
+    },
+    [
+      bookKey,
+      envConfig,
+      getConfig,
+      getViewsById,
+      handleDismissPopupAndSelection,
+      saveConfig,
+      settings,
+      updateBooknotes,
+      wordHarvestDecisionBusy,
+    ],
+  );
+
+  const handleWordHarvestAddNote = (note: string) => {
+    setShowWordHarvestPopup(false);
+    setShowAnnotPopup(true);
+    handleAnnotate(note, WORDHARVEST_LEARNING_COLOR, 'highlight');
   };
 
   // The pencil on a note bubble edits that note in the same editor the Annotate
@@ -1787,6 +2121,28 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
     setShowAnnotPopup(false);
     void suppressNativeSelectionHandles();
     setShowDeepLPopup(true);
+  };
+
+  const handleWordHarvest = () => {
+    if (!selection || !selection.text || !wordHarvestAvailable()) return;
+    try {
+      const source = {
+        bookKey,
+        title: bookData.book?.title || 'Untitled book',
+        author: bookData.book?.author || '',
+        locator:
+          selection.cfi && selection.cfi.length <= 512 ? selection.cfi : `page:${selection.page}`,
+      };
+      setWordHarvestRequest(buildWordHarvestLookup(selection, source));
+      setShowAnnotPopup(false);
+      void suppressNativeSelectionHandles();
+      setShowWordHarvestPopup(true);
+    } catch (error) {
+      eventDispatcher.dispatch('toast', {
+        message: error instanceof Error ? error.message : String(error),
+        type: 'error',
+      });
+    }
   };
 
   // `oneTime` is required rather than defaulted: it decides whether this reads
@@ -2470,6 +2826,14 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
         return { tooltipText: _(label), Icon, onClick: handleSearch };
       case 'dictionary':
         return { tooltipText: _(label), Icon, onClick: handleDictionary };
+      case 'wordharvest':
+        return {
+          tooltipText: _(label),
+          Icon,
+          onClick: handleWordHarvest,
+          disabled:
+            !wordHarvestAvailable() || !['EPUB', 'PDF'].includes(bookData.book?.format || ''),
+        };
       case 'translate':
         return { tooltipText: _(label), Icon, onClick: handleTranslation };
       case 'tts':
@@ -2539,7 +2903,11 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
   // toolbar: hide them while any of those is open, and let them come back with
   // the toolbar (or go with the dismiss).
   const overlaySurfaceOpen =
-    showDictionaryPopup || showDeepLPopup || showProofreadPopup || !!noteEditorTarget;
+    showDictionaryPopup ||
+    showWordHarvestPopup ||
+    showDeepLPopup ||
+    showProofreadPopup ||
+    !!noteEditorTarget;
 
   // Below `sm` (or short landscape) the note editor is a bottom sheet rather
   // than a popup pinned to the selection: an anchored editor would sit under
@@ -2548,12 +2916,104 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
     !!noteEditorTarget && (window.innerWidth < 640 || window.innerHeight < 640);
   const noteEditorInPopup = !!noteEditorTarget && !noteEditorInSheet;
   const editedNoteText =
+    noteEditorTarget?.initialValue ??
     config.booknotes?.find((annotation) => annotation.id === noteEditorTarget?.annotationId)
-      ?.note || '';
+      ?.note ??
+    '';
 
   return (
     <div ref={containerRef} role='toolbar' tabIndex={-1}>
       <PageTurnHint bookKey={bookKey} contentInsets={contentInsets} hint={turnHint} />
+      {chapterScanSelection !== null && (
+        <Dialog
+          isOpen
+          title='Scan chapter with WordHarvest'
+          onClose={() => setChapterScanSelection(null)}
+          boxClassName='sm:h-auto! sm:max-h-[90vh]! sm:w-[460px]!'
+          contentClassName='sm:px-6!'
+        >
+          <div className='space-y-4 pb-4 text-base-content'>
+            <p className='text-sm'>
+              Ready to scan the current chapter: <strong>{chapterOptions.find((option) => option.index === detectedChapterIndex)?.label}</strong>
+            </p>
+            <label className='form-control block'>
+              <span className='label-text mb-2 block font-medium'>Chapter to scan</span>
+              <select
+                className='select select-bordered w-full'
+                value={chapterScanSelection}
+                onChange={(event) => setChapterScanSelection(Number(event.target.value))}
+              >
+                {chapterOptions.map((option) => (
+                  <option key={option.index} value={option.index}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className='text-xs text-base-content/65'>Choose another chapter if the detected one is incorrect. Scanning starts only after confirmation.</p>
+            <div className='flex justify-end gap-2'>
+              <button className='btn btn-ghost' onClick={() => setChapterScanSelection(null)}>
+                Cancel
+              </button>
+              <button
+                className='btn btn-primary'
+                onClick={() => void handleRunChapterScan(chapterScanSelection)}
+              >
+                Scan chapter
+              </button>
+            </div>
+          </div>
+        </Dialog>
+      )}
+      {chapterScan && (
+        <div className='fixed bottom-4 left-1/2 z-[60] w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 rounded-xl border border-base-content/15 bg-base-100 p-4 text-base-content shadow-2xl'>
+          <div className='flex items-start justify-between gap-3'>
+            <div className='min-w-0'>
+              <div className='font-semibold'>WordHarvest · chapter scan</div>
+              <div className='mt-1 text-sm text-base-content/70'>
+                {chapterScan.error ||
+                  `${chapterScan.status === 'done' ? 'Finished' : chapterScan.status} · ${chapterScan.completed}/${chapterScan.total}`}
+              </div>
+              {chapterScanBusy && chapterScan.total > 0 && (
+                <progress
+                  className='progress progress-primary mt-2 w-full'
+                  value={chapterScan.completed}
+                  max={chapterScan.total}
+                />
+              )}
+            </div>
+            <button
+              className='btn btn-ghost btn-xs'
+              onClick={() => setChapterScan(null)}
+              aria-label={_('Close')}
+            >
+              ×
+            </button>
+          </div>
+          <div className='mt-3 flex justify-end gap-2'>
+            {chapterScanBusy && chapterScan.scanId && (
+              <button
+                className='btn btn-ghost btn-sm'
+                onClick={() => {
+                  scanCancelledRef.current = true;
+                  void cancelWordHarvestChapterScan(chapterScan.scanId).finally(() => {
+                    setChapterScan((scan) => (scan ? { ...scan, status: 'cancelled' } : scan));
+                  });
+                }}
+              >
+                Cancel scan
+              </button>
+            )}
+            {!chapterScanBusy &&
+              chapterScan.status !== 'error' &&
+              chapterScan.status !== 'cancelled' && (
+                <span className='self-center text-xs text-base-content/60'>
+                  {chapterScan.suggestions.length} candidate(s)
+                </span>
+              )}
+          </div>
+        </div>
+      )}
       {showDictionaryPopup &&
         (() => {
           // Below `sm` (or short landscape) we present the dictionary as a
@@ -2604,6 +3064,17 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
           onDismiss={handleDismissPopupShowToolbar}
         />
       )}
+      {showWordHarvestPopup && wordHarvestRequest && trianglePosition && dictPopupPosition && (
+        <WordHarvestPopup
+          request={wordHarvestRequest}
+          position={dictPopupPosition}
+          trianglePosition={trianglePosition}
+          width={dictPopupWidth}
+          height={dictPopupHeight}
+          onDismiss={handleDismissPopupShowToolbar}
+          onAddNote={handleWordHarvestAddNote}
+        />
+      )}
       {noteEditorInSheet && (
         <NoteEditorSheet
           value={editedNoteText}
@@ -2645,6 +3116,8 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
             globalToggleActive={globalToggleActive}
             onToggleGlobal={handleToggleGlobal}
             onHighlight={handleHighlight}
+            onWordHarvestDecision={handleWordHarvestDecision}
+            wordHarvestDecisionBusy={wordHarvestDecisionBusy}
             onDismiss={noteEditorTarget ? handleCancelNote : handleDismissPopupAndSelection}
           />
         )}
