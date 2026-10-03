@@ -8,6 +8,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useTranslator } from '@/hooks/useTranslator';
+import { translateDetailedWithWordHarvest, type WordHarvestTranslationContext } from '@/services/wordharvest';
 import { TRANSLATOR_LANGS } from '@/services/constants';
 import {
   UseTranslatorOptions,
@@ -30,6 +31,7 @@ const translatorLangs = generateTranslatorLangs();
 interface TranslatorPopupProps {
   bookKey: string;
   text: string;
+  wordHarvestContext?: WordHarvestTranslationContext;
   position: Position;
   trianglePosition: Position;
   popupWidth: number;
@@ -46,6 +48,7 @@ interface TranslatorType {
 const TranslatorPopup: React.FC<TranslatorPopupProps> = ({
   bookKey,
   text,
+  wordHarvestContext,
   position,
   trianglePosition,
   popupWidth,
@@ -66,6 +69,7 @@ const TranslatorPopup: React.FC<TranslatorPopupProps> = ({
     getViewSettings(bookKey)?.translationProvider ?? settings.globalReadSettings.translationProvider,
   );
   const [translation, setTranslation] = useState<string | null>(null);
+  const [definitionEn, setDefinitionEn] = useState<string | null>(null);
   const [detectedSourceLang, setDetectedSourceLang] = useState<string | null>(null);
 
   const [loading, setLoading] = useState(false);
@@ -121,11 +125,17 @@ const TranslatorPopup: React.FC<TranslatorPopupProps> = ({
       setError(null);
       setErrorDetail(null);
       setTranslation(null);
+      setDefinitionEn(null);
 
       try {
         const input = provider === 'wordharvest' ? text.trim() : text.replaceAll('\n', '').trim();
-        const result = await translate([input]);
-        const translatedText = result[0];
+        const wordHarvestResult = provider === 'wordharvest'
+          ? await translateDetailedWithWordHarvest(input, wordHarvestContext)
+          : null;
+        const translatedText = wordHarvestResult
+          ? wordHarvestResult.translation
+          : (await translate([input]))[0];
+        if (active) setDefinitionEn(wordHarvestResult?.definitionEn ?? null);
         const detectedSource = null;
 
         if (!translatedText) {
@@ -157,7 +167,7 @@ const TranslatorPopup: React.FC<TranslatorPopupProps> = ({
     fetchTranslation();
     return () => { active = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [text, token, sourceLang, targetLang, provider, translate]);
+  }, [text, token, sourceLang, targetLang, provider, translate, wordHarvestContext]);
 
   return (
     <div>
@@ -230,7 +240,10 @@ const TranslatorPopup: React.FC<TranslatorPopupProps> = ({
                   )}
                 </div>
               ) : (
-                <p className='whitespace-pre-wrap text-base'>{translation || _('No translation available.')}</p>
+                <div>
+                  {definitionEn && <p className='mb-2 text-base'>{definitionEn}</p>}
+                  <p className='whitespace-pre-wrap text-base'>{translation || _('No translation available.')}</p>
+                </div>
               )}
             </div>
           )}

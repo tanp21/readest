@@ -96,6 +96,7 @@ import NoteEditorSheet from './NoteEditorSheet';
 import TranslatorPopup from './TranslatorPopup';
 import WordHarvestPopup from './WordHarvestPopup';
 import { buildWordHarvestLookup } from '@/services/wordharvestContext';
+import type { WordHarvestTranslationContext } from '@/services/wordharvest';
 import { wordHarvestAvailable, type WordHarvestLookupRequest } from '@/services/wordharvest';
 import useShortcuts from '@/hooks/useShortcuts';
 import ProofreadPopup from './ProofreadPopup';
@@ -128,12 +129,14 @@ import {
   cancelWordHarvestChapterScan,
   decideWordHarvestChapterCandidate,
   getWordHarvestChapterScan,
+  getWordHarvestCandidateStatus,
   startWordHarvestChapterScan,
   type WordHarvestChapterScanSnapshot,
   type WordHarvestChapterSuggestion,
 } from '@/services/wordharvest';
 import { collectChapterScanText, findChapterOccurrenceCfis } from '@/services/wordharvestChapter';
 import {
+  applyWordHarvestLearningDecisions,
   markWordHarvestNoteLearning,
   upgradeLegacyWordHarvestColors,
   WORDHARVEST_LEARNING_COLOR,
@@ -207,6 +210,7 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
     null,
   );
   const [showDeepLPopup, setShowDeepLPopup] = useState(false);
+  const [wordHarvestTranslationContext, setWordHarvestTranslationContext] = useState<WordHarvestTranslationContext | undefined>();
   const [showProofreadPopup, setShowProofreadPopup] = useState(false);
   const [trianglePosition, setTrianglePosition] = useState<Position>();
   const [annotPopupPosition, setAnnotPopupPosition] = useState<Position>();
@@ -258,6 +262,46 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
     updateBooknotes,
   ]);
 
+  useEffect(() => {
+    if (!wordHarvestAvailable()) return;
+    let active = true;
+    let busy = false;
+    const refresh = async () => {
+      if (busy) return;
+      const notes = getConfig(bookKey)?.booknotes ?? [];
+      if (!notes.some((note) => !note.deletedAt && note.wordHarvest?.status === 'suggested')) return;
+      busy = true;
+      try {
+        const { decisions } = await getWordHarvestCandidateStatus(bookKey);
+        if (!active) return;
+        const current = getConfig(bookKey);
+        if (!current) return;
+        const { notes: updated, changed } = applyWordHarvestLearningDecisions(
+          current.booknotes ?? [], decisions, Date.now(),
+        );
+        if (!changed.length) return;
+        const updatedConfig = updateBooknotes(bookKey, updated);
+        if (updatedConfig) saveConfig(envConfig, bookKey, updatedConfig, settings);
+        const views = getViewsById(bookKey.split('-')[0]!);
+        for (const { before, after } of changed) {
+          views.forEach((readerView) => {
+            readerView?.addAnnotation(before, true);
+            readerView?.addAnnotation(after);
+          });
+        }
+        setAnnotationNotes((items) => items.map((note) =>
+          changed.find(({ before }) => before.id === note.id)?.after ?? note));
+      } catch {
+        // Pairing and availability can change while the book stays open.
+      } finally {
+        busy = false;
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 3000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [bookKey, envConfig, getConfig, getViewsById, saveConfig, settings, updateBooknotes]);
+
   const persistChapterSuggestions = useCallback(
     async (
       suggestions: WordHarvestChapterSuggestion[],
@@ -267,32 +311,30 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
       const currentConfig = getConfig(bookKey);
       if (!currentConfig) return 0;
       const existing = [...(currentConfig.booknotes ?? [])];
+      const senseCounts = new Map<string, number>();
+      for (const suggestion of suggestions) {
+        const pair = `${suggestion.term.toLocaleLowerCase()}\n${suggestion.context.toLocaleLowerCase()}`;
+        senseCounts.set(pair, (senseCounts.get(pair) ?? 0) + 1);
+      }
       const ignored = new Set(
         existing
           .filter((note) => note.deletedAt && note.wordHarvest)
           .map(
             (note) =>
-              `${note.wordHarvest!.term.toLocaleLowerCase()}\n${note.wordHarvest!.context.toLocaleLowerCase()}`,
+              `${note.wordHarvest!.term.toLocaleLowerCase()}\n${note.wordHarvest!.context.toLocaleLowerCase()}\n${note.wordHarvest!.senseKey ?? ''}`,
           ),
       );
       const now = Date.now();
       const created: BookNote[] = [];
+      const refreshed: Array<{ before: BookNote; after: BookNote }> = [];
       for (const suggestion of suggestions) {
-        if (
-          ignored.has(
-            `${suggestion.term.toLocaleLowerCase()}\n${suggestion.context.toLocaleLowerCase()}`,
-          )
-        )
-          continue;
+        const pair = `${suggestion.term.toLocaleLowerCase()}\n${suggestion.context.toLocaleLowerCase()}`;
+        if (ignored.has(`${pair}\n${suggestion.senseKey}`) ||
+            ((senseCounts.get(pair) ?? 0) === 1 && ignored.has(`${pair}\n`))) continue;
         for (const occurrence of suggestion.occurrences) {
           const anchor = anchors.get(occurrence.sentenceId);
           if (!anchor) continue;
-          for (const cfi of findChapterOccurrenceCfis(section, anchor, occurrence.surfaceForm)) {
-            const alreadySaved = existing.some(
-              (note) =>
-                !note.deletedAt && note.wordHarvest?.term === suggestion.term && note.cfi === cfi,
-            );
-            if (alreadySaved) continue;
+          for (const cfi of findChapterOccurrenceCfis(section, anchor, occurrence.surfaceForm, occurrence.occurrenceIndex)) {
             const definition = [
               `**${suggestion.term}**${suggestion.partOfSpeech ? ` · *${suggestion.partOfSpeech}*` : ''}`,
               '',
@@ -307,6 +349,30 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
               '',
               `*Context: ${suggestion.context}*`,
             ].join('\n');
+            const savedIndex = existing.findIndex(
+              (note) =>
+                !note.deletedAt && note.wordHarvest?.term === suggestion.term &&
+                (note.wordHarvest.senseKey === suggestion.senseKey ||
+                  (!note.wordHarvest.senseKey && (senseCounts.get(pair) ?? 0) === 1)) && note.cfi === cfi,
+            );
+            if (savedIndex >= 0) {
+              const saved = existing[savedIndex]!;
+              const metadata = saved.wordHarvest;
+              if (!metadata) continue;
+              const generated = metadata.status === 'suggested' && metadata.generatedNote === saved.note;
+              if (!metadata.senseKey || (generated && saved.note !== definition)) {
+                const updated = {
+                  ...saved,
+                  note: generated ? definition : saved.note,
+                  wordHarvest: { ...metadata, senseKey: suggestion.senseKey,
+                    generatedNote: generated ? definition : metadata.generatedNote },
+                  updatedAt: now,
+                };
+                existing[savedIndex] = updated;
+                refreshed.push({ before: saved, after: updated });
+              }
+              continue;
+            }
             created.push({
               id: uniqueId(),
               type: 'annotation',
@@ -319,7 +385,9 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
               wordHarvest: {
                 term: suggestion.term,
                 context: suggestion.context,
+                senseKey: suggestion.senseKey,
                 status: 'suggested',
+                generatedNote: definition,
               },
               createdAt: now,
               updatedAt: now,
@@ -327,11 +395,15 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
           }
         }
       }
-      if (!created.length) return 0;
+      if (!created.length && !refreshed.length) return 0;
       const updatedConfig = updateBooknotes(bookKey, [...existing, ...created]);
       if (updatedConfig) saveConfig(envConfig, bookKey, updatedConfig, settings);
+      for (const { before, after } of refreshed) {
+        await view?.addAnnotation(before, true);
+        await view?.addAnnotation(after);
+      }
       for (const annotation of created) await view?.addAnnotation(annotation);
-      return created.length;
+      return created.length + refreshed.length;
     },
     [bookKey, envConfig, getConfig, saveConfig, settings, updateBooknotes, view],
   );
@@ -392,7 +464,7 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
         setChapterScan({
           ...snapshot,
           error: count
-            ? `Added ${count} vocabulary highlights.`
+            ? `Added or refreshed ${count} vocabulary highlights.`
             : 'No new vocabulary highlights found.',
         });
       }
@@ -1951,6 +2023,7 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
           wordHarvest.term,
           wordHarvest.context,
           action,
+          wordHarvest.senseKey,
         );
         const currentConfig = getConfig(bookKey);
         if (!currentConfig) return 'Could not update this book note.';
@@ -1959,7 +2032,8 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
           (item) =>
             !item.deletedAt &&
             item.wordHarvest?.term === wordHarvest.term &&
-            item.wordHarvest?.context === wordHarvest.context,
+            item.wordHarvest?.context === wordHarvest.context &&
+            item.wordHarvest?.senseKey === wordHarvest.senseKey,
         );
         const changed = new Set(affected.map((item) => item.id));
         const updatedNotes = (currentConfig.booknotes ?? []).map((item) => {
@@ -2118,6 +2192,18 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
 
   const handleTranslation = () => {
     if (!selection || !selection.text) return;
+    let context: WordHarvestTranslationContext | undefined;
+    if (selection.text.trim().length <= 120) {
+      try {
+        context = buildWordHarvestLookup(selection, {
+          bookKey, title: bookData.book?.title || 'Untitled book',
+          author: bookData.book?.author || '', locator: '',
+        });
+      } catch {
+        // The translator still handles a passage when sentence anchoring is unavailable.
+      }
+    }
+    setWordHarvestTranslationContext(context);
     setShowAnnotPopup(false);
     void suppressNativeSelectionHandles();
     setShowDeepLPopup(true);
@@ -3057,6 +3143,7 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
         <TranslatorPopup
           bookKey={bookKey}
           text={selection?.text as string}
+          wordHarvestContext={wordHarvestTranslationContext}
           position={translatorPopupPosition}
           trianglePosition={trianglePosition}
           popupWidth={transPopupWidth}

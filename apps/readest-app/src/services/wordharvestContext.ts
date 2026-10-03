@@ -12,6 +12,17 @@ export function sentenceContext(text: string, offset: number, selection: string)
     throw new Error('Could not match the selection to its sentence.');
   }
   if (target.length > 2_000) throw new Error('The selected sentence is too long for a contextual lookup.');
+  const localOffset = Math.max(0, offset - segments[index]!.index);
+  const targetOffset = clean(segments[index]!.segment.slice(0, localOffset)).length;
+  const lower = target.toLocaleLowerCase();
+  const needle = clean(selection).toLocaleLowerCase();
+  let occurrenceIndex = 0;
+  let match = -1;
+  while ((match = lower.indexOf(needle, match + 1)) >= 0 && match < targetOffset) {
+    const before = lower[match - 1] ?? '';
+    const after = lower[match + needle.length] ?? '';
+    if (!/[\p{L}\p{N}]/u.test(before) && !/[\p{L}\p{N}]/u.test(after)) occurrenceIndex++;
+  }
   const before = segments.slice(Math.max(0, index - 3), index).map(({ segment }) => clean(segment)).filter(Boolean);
   const after = segments.slice(index + 1, index + 4).map(({ segment }) => clean(segment)).filter(Boolean);
   while (before.join('').length + after.join('').length + target.length > 6_000) {
@@ -19,7 +30,7 @@ export function sentenceContext(text: string, offset: number, selection: string)
     else if (after.length) after.pop();
     else break;
   }
-  return { sentence: target, before, after };
+  return { sentence: target, before, after, occurrenceIndex };
 }
 
 export function buildWordHarvestLookup(

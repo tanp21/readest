@@ -128,9 +128,11 @@ export const findChapterOccurrenceCfis = (
   section: SectionItem,
   sentence: ChapterSentenceAnchor,
   surfaceForm: string,
+  occurrenceIndex?: number,
 ): string[] => {
   const cfis: string[] = [];
-  for (const start of occurrencesInSentence(sentence.text, surfaceForm)) {
+  const matches = occurrencesInSentence(sentence.text, surfaceForm);
+  for (const start of occurrenceIndex === undefined ? matches : matches.slice(occurrenceIndex, occurrenceIndex + 1)) {
     const first = sentence.characterMap[start];
     const last = sentence.characterMap[start + surfaceForm.length - 1];
     if (!first || !last) continue;

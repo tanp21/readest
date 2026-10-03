@@ -15,6 +15,7 @@ export interface WordHarvestSource {
 export interface WordHarvestLookupRequest {
   selection: string;
   sentence: string;
+  occurrenceIndex?: number;
   before: string[];
   after: string[];
   source: WordHarvestSource;
@@ -51,11 +52,13 @@ export interface WordHarvestChapterScanRequest {
 export interface WordHarvestChapterOccurrence {
   sentenceId: string;
   surfaceForm: string;
+  occurrenceIndex: number;
   context: string;
 }
 
 export interface WordHarvestChapterSuggestion {
   candidateId: number;
+  senseKey: string;
   term: string;
   kind: string;
   partOfSpeech: string;
@@ -103,9 +106,26 @@ export const decideWordHarvestChapterCandidate = (
   term: string,
   context: string,
   action: 'learn' | 'ignore',
+  senseKey?: string,
 ) =>
-  request<{ status: string; ankiState: string }>('candidate_feedback', { term, context, action });
+  request<{ status: string; ankiState: string }>('candidate_feedback', { term, context, senseKey, action });
+export const getWordHarvestCandidateStatus = (bookKey: string) =>
+  request<{ decisions: Array<{ term: string; context: string; senseKey: string; decision: string }> }>(
+    'candidate_status', { bookKey },
+  );
+export interface WordHarvestTranslationContext {
+  sentence: string;
+  before: string[];
+  after: string[];
+  occurrenceIndex?: number;
+}
+
+export const translateDetailedWithWordHarvest = (
+  text: string,
+  context?: WordHarvestTranslationContext,
+) => request<{ translation: string; definitionEn?: string }>('translate', { text, ...context });
+
 export const translateWithWordHarvest = async (text: string) => {
-  const result = await request<{ translation: string }>('translate', { text });
+  const result = await translateDetailedWithWordHarvest(text);
   return result.translation;
 };

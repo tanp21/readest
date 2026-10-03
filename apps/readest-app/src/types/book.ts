@@ -213,7 +213,10 @@ export interface BookNote {
   wordHarvest?: {
     term: string;
     context: string;
+    senseKey?: string;
     status: 'suggested' | 'learning';
+    /** Last generated body; an edited annotation is never replaced on rescan. */
+    generatedNote?: string;
   };
   /**
    * If true, this annotation should be applied to every occurrence of `text`

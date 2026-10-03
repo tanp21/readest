@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { BookNote } from '@/types/book';
 import {
+  applyWordHarvestLearningDecisions,
   markWordHarvestNoteLearning,
   upgradeLegacyWordHarvestColors,
   WORDHARVEST_LEARNING_COLOR,
@@ -48,5 +49,23 @@ describe('WordHarvest scan highlight colors', () => {
     expect(learned.id).toBe(pending.id);
     expect(learned.cfi).toBe(pending.cfi);
     expect(learned.note).toBe(pending.note);
+  });
+
+  it('applies an Inbox Learn to every matching book highlight and keeps other senses intact', () => {
+    const first = { ...note('1', 'suggested'), wordHarvest: {
+      term: 'give up', context: 'She gave up.', senseKey: 'sense-a', status: 'suggested' as const,
+    } };
+    const second = { ...first, id: '2', cfi: 'epubcfi(/6/4)' };
+    const otherSense = { ...first, id: '3', wordHarvest: { ...first.wordHarvest, senseKey: 'sense-b' } };
+    const { notes, changed } = applyWordHarvestLearningDecisions(
+      [first, second, otherSense],
+      [{ term: 'give up', context: 'She gave up.', senseKey: 'sense-a', decision: 'learning' }],
+      10,
+    );
+    expect(changed).toHaveLength(2);
+    expect(notes.map((item) => item.wordHarvest?.status)).toEqual(['learning', 'learning', 'suggested']);
+    expect(notes[0]?.color).toBe(WORDHARVEST_LEARNING_COLOR);
+    expect(notes[0]?.note).toBe(first.note);
+    expect(notes[1]?.cfi).toBe(second.cfi);
   });
 });

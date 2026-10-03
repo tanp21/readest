@@ -12,6 +12,25 @@ export const markWordHarvestNoteLearning = (note: BookNote, updatedAt: number): 
   updatedAt,
 });
 
+export const applyWordHarvestLearningDecisions = (
+  notes: BookNote[],
+  decisions: Array<{ term: string; context: string; senseKey: string; decision: string }>,
+  updatedAt: number,
+): { notes: BookNote[]; changed: Array<{ before: BookNote; after: BookNote }> } => {
+  const learned = new Set(decisions.filter((item) => item.decision === 'learning')
+    .map((item) => `${item.term}\n${item.context}\n${item.senseKey}`));
+  const changed: Array<{ before: BookNote; after: BookNote }> = [];
+  const updated = notes.map((note) => {
+    const metadata = note.wordHarvest;
+    if (note.deletedAt || metadata?.status !== 'suggested' ||
+        !learned.has(`${metadata.term}\n${metadata.context}\n${metadata.senseKey ?? ''}`)) return note;
+    const after = markWordHarvestNoteLearning(note, updatedAt);
+    changed.push({ before: note, after });
+    return after;
+  });
+  return { notes: updated, changed };
+};
+
 /** Recolor scan notes made before suggested and learned terms had separate colors. */
 export const upgradeLegacyWordHarvestColors = (
   notes: BookNote[],

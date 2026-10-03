@@ -43,6 +43,7 @@ pub async fn wordharvest_request(
         "scan_status" => "/readest/v1/scans/status",
         "scan_cancel" => "/readest/v1/scans/cancel",
         "candidate_feedback" => "/readest/v1/candidates/feedback",
+        "candidate_status" => "/readest/v1/candidates/status",
         _ => return Err("Unknown WordHarvest operation.".into()),
     };
     let token = read_token(&app)?;
